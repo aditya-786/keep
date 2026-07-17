@@ -244,12 +244,21 @@ class AlertDeduplicator:
         rule.ignore_fields = default_full_dedup_rule.ignore_fields
         return [rule]
 
+    @staticmethod
+    def _is_keep_pseudo_provider(provider_id, provider_type) -> bool:
+        # alerts that arrive without a provider are deduplicated under the reserved
+        # "keep" provider type (see get_deduplication_rule), so it is a valid rule
+        # target even though no such provider is installed or linked
+        return bool(
+            not provider_id and provider_type and provider_type.lower() == "keep"
+        )
+
     def _generate_uuid(self, provider_id, provider_type):
         # this is a way to generate a unique uuid for the default deduplication rule per (provider_id, provider_type)
         namespace_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, "keephq.dev")
 
         # this is a workaround for this - https://github.com/keephq/keep/issues/4273
-        if not provider_id and provider_type and provider_type.lower() == "keep":
+        if self._is_keep_pseudo_provider(provider_id, provider_type):
             provider_type = None
 
         generated_uuid = str(
@@ -493,7 +502,11 @@ class AlertDeduplicator:
                 provider = p
                 break
 
-        if not provider and provider_key:
+        if (
+            not provider
+            and provider_key
+            and not self._is_keep_pseudo_provider(rule.provider_id, rule.provider_type)
+        ):
             message = f"Provider {rule.provider_type} not found"
             if rule.provider_id:
                 message += f" with id {rule.provider_id}"

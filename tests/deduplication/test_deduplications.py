@@ -8,6 +8,7 @@ import pytest
 import pytz
 from sqlalchemy import text
 
+from keep.api.alert_deduplicator.alert_deduplicator import AlertDeduplicator
 from keep.api.core.db import get_last_alerts
 from keep.api.core.dependencies import SINGLE_TENANT_UUID
 from keep.api.models.alert import DeduplicationRuleDto, AlertStatus
@@ -518,6 +519,71 @@ def test_update_deduplication_rule_non_exist_provider(db_session, client, test_a
     )
     assert response.status_code == 404
     assert response.json() == {"detail": "Provider datadog not found"}
+
+
+@pytest.mark.parametrize(
+    "test_app",
+    [
+        {
+            "AUTH_TYPE": "NOAUTH",
+        },
+    ],
+    indirect=True,
+)
+def test_create_deduplication_rule_for_keep_pseudo_provider(
+    db_session, client, test_app
+):
+    """Alerts pushed without a provider are deduplicated under the reserved "keep"
+    provider type, so a custom rule must be creatable for it even though no such
+    provider is installed or linked."""
+    custom_rule = {
+        "name": "Keep Rule",
+        "description": "Rule for alerts pushed over the API",
+        "provider_type": "keep",
+        "fingerprint_fields": ["title", "message"],
+        "full_deduplication": False,
+        "ignore_fields": None,
+    }
+    response = client.post(
+        "/deduplications", json=custom_rule, headers={"x-api-key": "some-api-key"}
+    )
+    assert response.status_code == 200
+
+    created = response.json()
+    assert created["provider_type"] == "keep"
+    assert created["provider_id"] is None
+    assert created["fingerprint_fields"] == ["title", "message"]
+
+
+@pytest.mark.parametrize(
+    "test_app",
+    [
+        {
+            "AUTH_TYPE": "NOAUTH",
+        },
+    ],
+    indirect=True,
+)
+def test_update_default_keep_deduplication_rule(db_session, client, test_app):
+    """Editing the default "keep" rule routes into create_deduplication_rule and
+    used to fail with "Provider keep not found" (issue #4273)."""
+    default_rule_id = AlertDeduplicator(SINGLE_TENANT_UUID)._generate_uuid(None, "keep")
+
+    updated_rule = {
+        "name": "Keep Rule",
+        "description": "Overriding the default keep rule",
+        "provider_type": "keep",
+        "fingerprint_fields": ["title"],
+        "full_deduplication": False,
+        "ignore_fields": None,
+    }
+    response = client.put(
+        f"/deduplications/{default_rule_id}",
+        json=updated_rule,
+        headers={"x-api-key": "some-api-key"},
+    )
+    assert response.status_code == 200
+    assert response.json()["fingerprint_fields"] == ["title"]
 
 
 @pytest.mark.parametrize(
